@@ -1,4 +1,8 @@
 classdef FlyPursuit < handle
+   % FlyPursuit - clustering-based fly tracker
+   
+   % TODO
+   %  - keep track of current frame number and save tracks directly to object
    
    properties
       vr, vFileName
@@ -73,6 +77,25 @@ classdef FlyPursuit < handle
          %obj.currentFrame = obj.getFrames(obj.frameIdx);
       end
       
+      function drawArenaPoly(obj, frameNumber)
+         if nargin==1
+            frameNumber = 1;
+         end
+         frame = obj.getFrames(frameNumber);
+         
+         [obj.arenaX, obj.arenaY] = ellipsePoints(obj.h./2, obj.w/2, 90, obj.h./2, obj.w/2,12);
+         obj.arena = poly2mask(obj.arenaX, obj.arenaY, obj.w, obj.h);
+         obj.boundsY = limit(round(min(obj.arenaY):max(obj.arenaY)),1, obj.h);
+         obj.boundsX = limit(round(min(obj.arenaX):max(obj.arenaX)),1, obj.w);
+         obj.arenaCrop = obj.arena(obj.boundsY, obj.boundsX);% crop arena
+         obj.w = length(obj.boundsX);
+         obj.h = length(obj.boundsY);
+         
+         imagesc(frame);
+         hold on
+         plot(obj.arenaX, obj.arenaY,'k','LineWidth',3)
+         drawnow
+      end
       
       function drawArena(obj, frameNumber)
          %% draw arena and set initial positions
@@ -96,10 +119,11 @@ classdef FlyPursuit < handle
       
       function initFlies(obj,n)
          frame = obj.getFrames(n);
-         clf
          imagesc(frame);
+         hold on
+         plot(obj.arenaX, obj.arenaY,'LineWidth',3)
          [~, x, y] = roipoly();
-         obj.nFlies = size(x,1)-1;
+         obj.nFlies = max(1,size(x,1)-1);
          obj.pos = [x,y];
          % initialize gmm
          sigma = repmat(diag([10 10]),[1 1 obj.nFlies]);
@@ -111,10 +135,14 @@ classdef FlyPursuit < handle
       function g = clusterFrame(obj, frame)
          % create samples from frame and custer points
          [X, Y] = randp(single(frame), obj.nSamp, 1);
-         g0.mu = obj.gmmStart.mu;
-         g0.Sigma = obj.gmmStart.Sigma;
-         g0.PComponents = obj.gmmStart.PComponents;
-         gmm = gmdistribution.fit([X;Y]',obj.nFlies, 'Start',g0);
+         if isempty(obj.gmmStart)
+            gmm = gmdistribution.fit([X;Y]',obj.nFlies,'Replicates',500);
+         else
+            g0.mu = obj.gmmStart.mu;
+            g0.Sigma = obj.gmmStart.Sigma;
+            g0.PComponents = obj.gmmStart.PComponents;
+            gmm = gmdistribution.fit([X;Y]',obj.nFlies, 'Start',g0);
+         end
          g.mu = gmm.mu;
          g.Sigma =gmm.Sigma;
          g.PComponents =gmm.PComponents;
@@ -136,11 +164,6 @@ classdef FlyPursuit < handle
                gIdx = find(clusterGroup==g); % how many flies in the group?
                gNflies = length(gIdx);
                [X, Y] = randp(gFrame, gNflies*1000, 1);% get samples for centroids in the group
-               %                [X, Y] = sampleGrid(gFrame);% get samples for centroids in the group
-               %                X = X';
-               %                Y = Y';
-               
-               hold on
                if gNflies==0
                   disp(['region ' int2str(g) ' contains no flies.'])
                elseif gNflies==1 % if there's only one fly we simply calc the mean and cov of the points
@@ -175,7 +198,6 @@ classdef FlyPursuit < handle
                   % collect results over all connected components
                   mu(gIdx,:) = gmmTmp.mu;
                   Sigma(:,:,gIdx) = gmmTmp.Sigma;
-                  
                end
             end
             if any(mu(:)==0)
@@ -185,7 +207,6 @@ classdef FlyPursuit < handle
          end
          gmm.mu = mu;
          gmm.Sigma = Sigma;
-         
       end
       
       function getBackGround(obj, varargin)
@@ -213,6 +234,7 @@ classdef FlyPursuit < handle
       
       function frame = getForeGround(obj, frame, sense)
          %frame = obj.getForeGround(frame, sense)
+         % simple background subtraction
          if nargin==2
             sense = 5;
          end
@@ -233,6 +255,10 @@ classdef FlyPursuit < handle
       end
       
       function [bw, frame, clusterGroup, Nconn] = getForeGroundAdaptive(obj, oriFrame, oldFrame, oldCentroids, sense)
+         % background subtraction - treat everything that is not in the
+         % neighbourhood of the fly as noise
+         % if new foregroudn does not cover the position of the fly in the previous frame
+         % sensitivity and neighbourhood are increased
          if nargin<5
             sense = 10;
          end
@@ -280,6 +306,7 @@ classdef FlyPursuit < handle
       end
       
       function newLabels = assignCentroid2Track(obj, oldCentroid, newCentroid, oldLabels, maxDist)
+         % assigns cluster centers to fly ids
          if nargin<5
             maxDist = 20;
          end
@@ -289,7 +316,6 @@ classdef FlyPursuit < handle
          D(D>maxDist) = 1000*D(D>maxDist);% penalize jumps - works only partly
          assign = munkres(D);
          [idx, ~] = find(assign);
-         %%
          newLabels = oldLabels(idx);% labels for each p.centroid
          if ~all(newLabels), newLabels = obj.nFlies; end
       end
@@ -312,7 +338,7 @@ classdef FlyPursuit < handle
             hee(nf) = error_ellipse(gmm.Sigma(:,:,nf), gmm.mu(nf,:));
          end
          hold off
-         set(hee, 'LineWidth', 2, 'Color','k')
+         set(hee, 'LineWidth', 2, 'Color','r')
       end
       
       
