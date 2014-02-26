@@ -1,4 +1,4 @@
-classdef FlyPursuit < handle
+classdef FlyPursuit2 < handle
    % FlyPursuit - clustering-based fly tracker
    
    % TODO
@@ -9,7 +9,7 @@ classdef FlyPursuit < handle
       nFlies, nSamp, initFrame
       w, h
       pos
-      currentFrame, previousFrame, frameIdx
+      currentFrame, previousFrame, frameIdx, NumberOfFrames
       medianFrame, stdFrame, madFrame
       gmmStart, gmm
       arena, arenaCrop, arenaX, arenaY, boundsX, boundsY
@@ -19,16 +19,14 @@ classdef FlyPursuit < handle
    end
    
    methods (Access='public')
-      function obj = FlyPursuit(varargin)
+      function obj = FlyPursuit2(varargin)
          % get video reader
          obj.vFileName = varargin{1};
-         try
-            obj.vr = VideoPlayer(obj.vFileName);
-         catch
-            obj.vr = VideoReader(obj.vFileName);
-         end
+         %obj.vr = VideoReader(obj.vFileName);
+         obj.vr = VideoPlayer(obj.vFileName);
          obj.w = obj.vr.Width;
          obj.h = obj.vr.Height;
+         obj.NumberOfFrames = obj.vr.NumFrames;
          % init arena to comprise full frame
          obj.arenaX = 1:obj.w;
          obj.arenaY = 1:obj.h;
@@ -36,10 +34,10 @@ classdef FlyPursuit < handle
          obj.boundsY = 1:obj.h;
          obj.arena = true(obj.w, obj.h);
          %
-         obj.centroid = zeros(obj.vr.NumberOfFrames,obj.nFlies,2);
-         obj.sigma = zeros(obj.vr.NumberOfFrames,2,2,obj.nFlies);
-         obj.tracks = zeros(obj.vr.NumberOfFrames, obj.nFlies,2);
-         obj.pathLabels = zeros(obj.vr.NumberOfFrames, obj.nFlies);% track label for each centroid/sigma
+         obj.centroid = zeros(obj.NumberOfFrames,obj.nFlies,2);
+         obj.sigma = zeros(obj.NumberOfFrames,2,2,obj.nFlies);
+         obj.tracks = zeros(obj.NumberOfFrames, obj.nFlies,2);
+         obj.pathLabels = zeros(obj.NumberOfFrames, obj.nFlies);% track label for each centroid/sigma
          obj.pathLabels(1,:) = 1:obj.nFlies;% seed initial labels
          %
          obj.seNew = strel('disk',10);
@@ -219,7 +217,7 @@ classdef FlyPursuit < handle
       
       function getBackGround(obj, varargin)
          nFrames = varargin{1};
-         framesToRead = randsample(obj.vr.NumberOfFrames, nFrames);
+         framesToRead = randsample(obj.NumberOfFrames, nFrames);
          frames = obj.getFrames(framesToRead);
          frames = reshape(single(frames), [], size(frames,3));
          obj.medianFrame = reshape(median(frames,2), obj.h, obj.w);
