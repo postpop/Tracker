@@ -9,13 +9,12 @@ classdef FlyPursuit < handle
       nFlies, nSamp, initFrame
       w, h
       pos
-      currentFrame, previousFrame, frameIdx
-      medianFrame, stdFrame, madFrame
+      currentFrame, currentFrameIdx, NumberOfFrames
+      medianFrame, meanFrame, stdFrame, madFrame
       gmmStart, gmm
       arena, arenaCrop, arenaX, arenaY, boundsX, boundsY
       seNew, seOld, se10
       centroid, sigma, tracks, pathLabels
-      
    end
    
    methods (Access='public')
@@ -23,15 +22,17 @@ classdef FlyPursuit < handle
          % get video reader
          obj.vFileName = varargin{1};
          try
-            obj.vr = VideoPlayer(obj.vFileName);
+            obj.vr = VideoReader2(obj.vFileName);
          catch
             obj.vr = VideoReader(obj.vFileName);
          end
          obj.w = obj.vr.Width;
          obj.h = obj.vr.Height;
+         obj.NumberOfFrames = obj.vr.NumberOfFrames;
+         obj.currentFrameIdx = 0;
          % init arena to comprise full frame
-         obj.arenaX = 1:obj.w;
-         obj.arenaY = 1:obj.h;
+         obj.arenaX = [1 1 obj.w obj.w 1];
+         obj.arenaY = [1 obj.h obj.h 1 1];
          obj.boundsX = 1:obj.w;
          obj.boundsY = 1:obj.h;
          obj.arena = true(obj.w, obj.h);
@@ -59,11 +60,7 @@ classdef FlyPursuit < handle
          
          frames = zeros(obj.vr.Height, obj.vr.Width, length(framesToRead), 'uint8');
          for f = 1:length(framesToRead);
-            if isa(obj.vr,'VideoPlayer')                  % videoutils toolbox
-               tmpFrame = obj.vr.getFrameAtNum(framesToRead(f))*255;
-            else                                         % standard MATLAB VIDEOREADER
-               tmpFrame = obj.vr.read(framesToRead(f));               
-            end
+            tmpFrame = obj.vr.read(framesToRead(f));
             % make monochromatic
             if size(tmpFrame,3)>1
                tmpFrame = mean(tmpFrame,3);
@@ -73,25 +70,27 @@ classdef FlyPursuit < handle
          frames = obj.cropFrameToArenaBounds(frames);
       end
       
-      function getFrame(obj, n)
-         obj.currentFrame = obj.getFrames(n);
+      function frame = getFrame(obj, n)
+         frame = obj.getFrames(n);
+         obj.currentFrame = frame;
       end
       
       function getNextFrame(obj)
-         disp('not implemented')
-         %obj.previousFrame = obj.currentFrame;
-         %obj.frameIdx = obj.frameIdx+1;
-         % check for bounds!!
-         %obj.currentFrame = obj.getFrames(obj.frameIdx);
+         obj.currentFrameIdx = obj.currentFrameIdx + 1;
+         obj.currentFrame = obj.getFrame(obj.currentFrameIdx);
       end
       
-      function drawArenaPoly(obj, frameNumber)
+      function drawArenaPoly(obj, frameNumber, radius)
          if nargin==1
             frameNumber = 1;
          end
+         if nargin<=2
+            radius = 1;
+         end
          frame = obj.getFrames(frameNumber);
          
-         [obj.arenaX, obj.arenaY] = ellipsePoints(obj.h./2, obj.w/2, 90, obj.h./2, obj.w/2,12);
+         [obj.arenaX, obj.arenaY] = ellipsePoints(obj.h./2*radius, obj.w/2*radius, 90,...
+            obj.h./2, obj.w/2,12);
          obj.arena = poly2mask(obj.arenaX, obj.arenaY, obj.w, obj.h);
          obj.boundsY = limit(round(min(obj.arenaY):max(obj.arenaY)),1, obj.h);
          obj.boundsX = limit(round(min(obj.arenaX):max(obj.arenaX)),1, obj.w);
@@ -133,6 +132,7 @@ classdef FlyPursuit < handle
          [~, x, y] = roipoly();
          obj.nFlies = max(1,size(x,1)-1);
          obj.pos = [x,y];
+         obj.pos = unique(obj.pos, 'rows');
          % initialize gmm
          sigma = repmat(diag([10 10]),[1 1 obj.nFlies]);
          mu = [x(1:obj.nFlies),y(1:obj.nFlies)];
@@ -149,7 +149,11 @@ classdef FlyPursuit < handle
             g0.mu = obj.gmmStart.mu;
             g0.Sigma = obj.gmmStart.Sigma;
             g0.PComponents = obj.gmmStart.PComponents;
-            gmm = gmdistribution.fit([X;Y]',obj.nFlies, 'Start',g0);
+            try
+               gmm = gmdistribution.fit([X;Y]',obj.nFlies, 'Start',g0);
+            catch
+               gmm = gmdistribution.fit([X;Y]',obj.nFlies, 'Replicates',500);
+            end
          end
          g.mu = gmm.mu;
          g.Sigma =gmm.Sigma;
@@ -223,6 +227,7 @@ classdef FlyPursuit < handle
          frames = obj.getFrames(framesToRead);
          frames = reshape(single(frames), [], size(frames,3));
          obj.medianFrame = reshape(median(frames,2), obj.h, obj.w);
+         obj.meanFrame = reshape(mean(frames,2), obj.h, obj.w);
          obj.madFrame = reshape(mad(frames',1), obj.h, obj.w);
          obj.madFrame = medfilt2(obj.madFrame,[2 2]);
          obj.madFrame = limit(obj.madFrame,0,2);
@@ -235,8 +240,12 @@ classdef FlyPursuit < handle
       end
       
       function frames = deleteFrameOutsideArena(obj, frames)
-         for f = 1:size(frames,3)
-            frames(obj.arena,f) = 0;
+         if length(size(frames))==2
+            frames(obj.arenaCrop) = 0;
+         else
+            for f = 1:size(frames,3)
+               frames(obj.arenaCrop,f) = 0;
+            end
          end
       end
       
@@ -246,26 +255,34 @@ classdef FlyPursuit < handle
          if nargin==2
             sense = 5;
          end
-         se = strel('disk',2);
+         oriFrame= frame;
+         %          se = strel('disk',2);
          H = fspecial('gaussian',30,3);
          frame = single(frame);
-         frame = -(frame - obj.medianFrame);         % distance to background
-         frame = limit(frame,0, inf);                % keep only pos deviations
-         lum = mean(frame(:));
-         frame = frame>lum*sense*(obj.madFrame);     % scale thres by mean luminance of the frame
+         %          % frame = (frame - obj.medianFrame);         % distance to background
+         frame = abs(frame - obj.medianFrame);         % distance to background
+         %          %frame = limit(frame,0, inf);                % keep only pos deviations
+         %          frame = imclose(frame, strel('disk',4));
+         %          lum = mean(frame(:));
+         %          frame = frame>lum*sense*(obj.madFrame);     % scale thres by mean luminance of the frame
+         se2 = strel('disk',2);
+         se5 = strel('disk',5);
+         frame = imclose(imopen(log(frame)>sense*nanmedian(log(frame(:))),se2),se5);
          
          frame = single(frame);
          frame(~obj.arenaCrop(:)) = 0;               % delete everything outside arena
-         frame = medfilt2(frame,[3 3]);              % remove specks
-         frame = imerode(frame, se);                 % erode...
-         frame = imfilter(frame, H, 'replicate');    % smooth
+         %          frame = medfilt2(frame,[3 3]);              % remove specks
+         %          frame = imerode(frame, se);                 % erode...
+         %          frame = medfilt2(frame,[3 3]);              % remove specks
+         %frame = imfilter(frame, H, 'replicate');    % smooth
+         frame = imgaussian(frame, 3, 30);    % smooth
          %%
       end
       
       function [bw, frame, clusterGroup, Nconn] = getForeGroundAdaptive(obj, oriFrame, oldFrame, oldCentroids, sense)
          % background subtraction - treat everything that is not in the
          % neighbourhood of the fly as noise
-         % if new foregroudn does not cover the position of the fly in the previous frame
+         % if new foreground does not cover the position of the fly in the previous frame
          % sensitivity and neighbourhood are increased
          if nargin<5
             sense = 10;
@@ -318,14 +335,18 @@ classdef FlyPursuit < handle
          if nargin<5
             maxDist = 20;
          end
-         C1 = squeeze(oldCentroid);
-         C2 = squeeze(newCentroid);
-         D = pdist2(C1, C2);
-         D(D>maxDist) = 1000*D(D>maxDist);% penalize jumps - works only partly
-         assign = munkres(D);
-         [idx, ~] = find(assign);
-         newLabels = oldLabels(idx);% labels for each p.centroid
-         if ~all(newLabels), newLabels = obj.nFlies; end
+         if length(oldLabels)==1 % if we have just a single fly, skip
+            newLabels = oldLabels;
+         else
+            C1 = squeeze(oldCentroid);
+            C2 = squeeze(newCentroid);
+            D = pdist2(C1, C2);
+            D(D>maxDist) = 1000*D(D>maxDist);% penalize jumps - works only partly
+            assign = munkres(D);
+            [idx, ~] = find(assign);
+            newLabels = oldLabels(idx);% labels for each p.centroid
+            if ~all(newLabels), newLabels = obj.nFlies; end
+         end
       end
       
       function playTrack(obj, history, offset)
@@ -347,6 +368,21 @@ classdef FlyPursuit < handle
          end
          hold off
          set(hee, 'LineWidth', 2, 'Color','r')
+      end
+      
+      function flySpeed = getSpeed(obj)
+         flySpeed = sqrt(sum(diff(obj.tracks,1).^2,3));
+      end
+      
+      function flyDist = getDist(obj)
+         flyCnt = 0;
+         flyDist = zeros(size(obj.tracks,1), obj.nFlies^2/2 - obj.nFlies/2);
+         for fly1 = 1:obj.nFlies
+            for fly2 = fly1+1:obj.nFlies
+               flyCnt = flyCnt+1;
+               flyDist(:, flyCnt) = squeeze(sqrt(sum((obj.tracks(:,fly1,:) - obj.tracks(:,fly2,:)).^2,3)));
+            end
+         end
       end
       
       
