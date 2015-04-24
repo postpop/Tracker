@@ -19,7 +19,7 @@ for f = 1:length(p.framesToRead)
       % convert track idx (in cropped frame) to global frame idx
       flyX = round(p.fp.tracks(framesToRead(f),:,1) + min(p.fp.boundsX));
       flyY = round(p.fp.tracks(framesToRead(f),:,2) + min(p.fp.boundsY));
-      flyFrame = extractFlyBox(frame,flyX,flyY,p.boxW,p.boxH);
+      flyFrame = fix.extractFlyBox(frame,flyX,flyY,p.boxW,p.boxH);
    end
    singleFlyFrame = flyFrame(:, (p.flyIdx(flyIdxIdx(f),p.currentFly)-1)*length(p.boxH) + (1:length(p.boxH)) ,:);
    

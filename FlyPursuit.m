@@ -36,22 +36,24 @@ classdef FlyPursuit < handle
          % get video reader
          obj.vFileName = varargin{1};
          try
-            if isunix && ~ismac
-               obj.vr = VideoReader3(obj.vFileName);
+            if isunix
+               obj.vr = VideoReaderFFMPEG(obj.vFileName);
             else
-               obj.vr = VideoReader3(obj.vFileName);
+               % use builtin VideoReader on windows - it's faster
+               obj.vr = VideoReader(obj.vFileName);
             end
          catch
-            obj.vr = VideoReader3(obj.vFileName);
+            obj.vr = VideoReader(obj.vFileName);
          end
          
          try
             [~ ,~, obj.colorChannels] = size(obj.getFrame(1));
          end
          
-         obj.w = obj.vr.Width;
-         obj.h = obj.vr.Height;
+         obj.w = obj.vr.Height;
+         obj.h = obj.vr.Width;
          obj.NumberOfFrames = obj.vr.NumberOfFrames;
+         obj.initFrame = 1;
          obj.currentFrameIdx = 0;
          % init arena to comprise full frame
          obj.arenaX = [1 1 obj.w obj.w 1];
@@ -69,14 +71,14 @@ classdef FlyPursuit < handle
          obj.area = zeros(obj.vr.NumberOfFrames,obj.nFlies);
          
          obj.foreGroundThreshold = 5;
-         obj.maxDist = 20;
+         obj.maxDist = 2*20;
          %
-         obj.seNew = strel('disk',10);
-         obj.seOld = strel('disk',10);
-         obj.se10 = strel('disk',10);
-         obj.H = fspecial('gaussian',30,3);
-         obj.se2 = strel('disk',2);
-         obj.se5 = strel('disk',5);
+         obj.seNew = strel('disk',2*10);
+         obj.seOld = strel('disk',2*10);
+         obj.se10 = strel('disk',2*10);
+         obj.H = fspecial('gaussian',2*30,2*3);
+         obj.se2 = strel('disk',2*2);
+         obj.se5 = strel('disk',2*5);
       end
       
       function initTracker(obj, initFrame, gmmStart)
@@ -95,9 +97,9 @@ classdef FlyPursuit < handle
          obj.negLogLikelihood = zeros(obj.vr.NumberOfFrames,1);
          
          obj.foreGroundThreshold = 5;
-         obj.maxDist = 20;
-         obj.se2 = strel('disk',2);
-         obj.se5 = strel('disk',5);
+         obj.maxDist = 2*20;
+         obj.se2 = strel('disk',2*2);
+         obj.se5 = strel('disk',2*5);
          % set initial track values
          obj.currentFrameIdx = max(obj.initFrame-1,1);
          obj.pathLabels(obj.currentFrameIdx,:) = 1:obj.nFlies;% seed initial labels
@@ -121,6 +123,7 @@ classdef FlyPursuit < handle
             subplot(211)
             imagesc(obj.currentFrame)
             set(gca,'DataAspectRatio',[1 1 1])
+            drawnow
          end
          %% get new foreground
          % clean-up frame
@@ -160,6 +163,7 @@ classdef FlyPursuit < handle
             plot([flyX;flyX + 50*obj.orientation(obj.currentFrameIdx,:,1)], [flyY;flyY + 50*obj.orientation(obj.currentFrameIdx,:,2)])
             title(obj.currentFrameIdx);
             set(gca,'DataAspectRatio',[1 1 1])
+            drawnow
          end
       end
       
@@ -232,7 +236,9 @@ classdef FlyPursuit < handle
          elseif length(varargin)==2
             framesToRead = varargin{1}:varargin{2};
          end
+         % need to use original image dimensions here - but not if we crop
          frames = zeros(obj.vr.Height, obj.vr.Width, length(framesToRead), 'uint8');
+
          for f = 1:length(framesToRead);
             tmpFrame = obj.vr.read(framesToRead(f));
             % make monochromatic
@@ -262,7 +268,7 @@ classdef FlyPursuit < handle
          end
       end
       
-      %% __ FUNCTIONS FOR INITIALIZING FLY POSITIONS __
+      % __ FUNCTIONS FOR INITIALIZING FLY POSITIONS __
       function drawArenaPoly(obj, frameNumber, radius)
          if nargin==1
             frameNumber = 1;
@@ -270,21 +276,17 @@ classdef FlyPursuit < handle
          if nargin<=2
             radius = 1;
          end
-         frame = obj.getFrames(frameNumber);
+         % make symmetrical ell
+         radius = min(obj.h./2, obj.w/2) * radius;
          
-         [obj.arenaX, obj.arenaY] = ellipsePoints(obj.h./2*radius, obj.w/2*radius, 90,...
-            obj.h./2, obj.w/2,12);
+         [obj.arenaY, obj.arenaX] = ellipsePoints(radius, radius, 90,...
+            obj.w./2, obj.h./2 ,12);
          obj.arena = poly2mask(obj.arenaX, obj.arenaY, obj.w, obj.h);
-         obj.boundsY = limit(round(min(obj.arenaY):max(obj.arenaY)),1, obj.h);
-         obj.boundsX = limit(round(min(obj.arenaX):max(obj.arenaX)),1, obj.w);
-         obj.arenaCrop = obj.arena(obj.boundsY, obj.boundsX);% crop arena
+         obj.boundsX = unique(limit(round(min(obj.arenaY):max(obj.arenaY)),1, obj.w));
+         obj.boundsY = unique(limit(round(min(obj.arenaX):max(obj.arenaX)),1, obj.h));
+         obj.arenaCrop = obj.arena(obj.boundsX, obj.boundsY);% crop arena
          obj.w = length(obj.boundsX);
          obj.h = length(obj.boundsY);
-         
-         %          imagesc(frame);
-         %          hold on
-         %          plot(obj.arenaX, obj.arenaY,'k','LineWidth',3)
-         %          drawnow
       end
       
       function drawArena(obj, frameNumber)
@@ -297,9 +299,10 @@ classdef FlyPursuit < handle
          imagesc(frame);
          disp('please draw arena...')
          [obj.arena, obj.arenaX, obj.arenaY] = roipoly();
-         obj.boundsY = limit(round(min(obj.arenaY):max(obj.arenaY)),1, obj.h);
-         obj.boundsX = limit(round(min(obj.arenaX):max(obj.arenaX)),1, obj.w);
-         obj.arenaCrop = obj.arena(obj.boundsY, obj.boundsX);% crop arena
+         obj.boundsX = limit(round(min(obj.arenaY):max(obj.arenaY)),1, obj.w);
+         obj.boundsY = limit(round(min(obj.arenaX):max(obj.arenaX)),1, obj.h);
+%          obj.arenaCrop = obj.arena(obj.boundsY, obj.boundsX);% crop arena
+         obj.arenaCrop = obj.arena(obj.boundsX, obj.boundsY);% crop arena
          obj.w = length(obj.boundsX);
          obj.h = length(obj.boundsY);
          hold on
@@ -310,8 +313,8 @@ classdef FlyPursuit < handle
       function initFlies(obj,n)
          frame = obj.getFrames(n);
          imagesc(frame);
-         hold on
-         plot(obj.arenaX, obj.arenaY,'LineWidth',3)
+%          hold on
+%          plot(obj.arenaX, obj.arenaY,'LineWidth',3)
          [~, x, y] = roipoly();
          obj.nFlies = max(1,size(x,1)-1);
          obj.pos = [x,y];
@@ -468,17 +471,17 @@ classdef FlyPursuit < handle
          frames = obj.getFrames(framesToRead);
          frames = reshape(single(frames), [], size(frames,3));
          % background frame (median more robust)
-         obj.medianFrame = reshape(median(frames,2), obj.h, obj.w);
-         obj.meanFrame = reshape(mean(frames,2), obj.h, obj.w);
+         obj.medianFrame = reshape(median(frames,2), obj.w, obj.h);
+         obj.meanFrame = reshape(mean(frames,2), obj.w, obj.h);
          % detect slow drift in luminance over time
          obj.temporalTrend = single(smooth(median(frames,1),100) - median(obj.medianFrame(:)));
          % remove trend from sample frames
          frames = bsxfun(@minus, frames, obj.temporalTrend');
          % calc detrended background frame (median more robust)
-         obj.medianFrame = reshape(median(frames,2), obj.h, obj.w);
+         obj.medianFrame = reshape(median(frames,2), obj.w, obj.h);
          % mad and std frames
-         obj.stdFrame = reshape(std(single(frames),[],2), obj.h, obj.w);
-         obj.madFrame = reshape(mad(frames',1), obj.h, obj.w);
+         obj.stdFrame = reshape(std(single(frames),[],2), obj.w, obj.h);
+         obj.madFrame = reshape(mad(frames',1), obj.w, obj.h);
          obj.madFrame = medfilt2(obj.madFrame,[2 2]);
          %obj.madFrame = limit(obj.madFrame,0,2);
          obj.madFrame(obj.madFrame(:)==0) = min(obj.madFrame(obj.madFrame>0));% avoid zero threshold
@@ -490,7 +493,7 @@ classdef FlyPursuit < handle
       end
       
       function frames = cropFrameToArenaBounds(obj, frames)
-         frames = frames(obj.boundsY,obj.boundsX,:);
+         frames = frames(obj.boundsX,obj.boundsY,:);
       end
       
       function frames = deleteFrameOutsideArena(obj, frames)
@@ -570,8 +573,10 @@ classdef FlyPursuit < handle
             frame = obj.getForeGround(oriFrame, sense, frameNumber);
             % clean frame - remove specks that appear far away from old fly positions
             oldMask = false(size(frame));
-            flyPosY = limit(round(oldCentroids(:,1)),1,obj.w);
-            flyPosX = limit(round(oldCentroids(:,2)),1,obj.h);
+%             flyPosX = limit(round(oldCentroids(:,2)),1,obj.h);
+%             flyPosY = limit(round(oldCentroids(:,1)),1,obj.w);
+            flyPosX = limit(round(oldCentroids(:,2)),1,obj.w);
+            flyPosY = limit(round(oldCentroids(:,1)),1,obj.h);
             oldMask(sub2ind(size(oldMask), flyPosX, flyPosY)) = true;
             oldMask = imdilate(logical(oldMask), obj.seOld);% grow positions
             frame(~oldMask) = 0;% remove all pixels that are far away from the flies' previous positions
@@ -579,8 +584,8 @@ classdef FlyPursuit < handle
             mask = imdilate(logical(frame), obj.seNew);% get mask from current frame
             [bw, Nconn] = bwlabel(mask);% find conn comps in mask
             clusterGroup = diag(bw(...
-               limit(round(oldCentroids(:,2)),1,max(obj.boundsY)),...
-               limit(round(oldCentroids(:,1)),1,max(obj.boundsX))));% assign cluster center to conn comps
+               limit(round(oldCentroids(:,2)),1,max(obj.boundsX)),...
+               limit(round(oldCentroids(:,1)),1,max(obj.boundsY))));% assign cluster center to conn comps
             lostFly = find(clusterGroup==0);% who did we loose?
             if ~isempty(lostFly)
                disp(['   we lost the following members of the crew: ' mat2str(lostFly') '.'])

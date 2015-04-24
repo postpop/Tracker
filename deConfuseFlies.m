@@ -80,7 +80,7 @@ end
 % populate file list and initialize all parameters
 if p.init
    disp(['parsing ' p.dirName ' for tracking results'])
-   fileList = rdir(fullfile(p.dirName, ['**' filesep '*_res.mat']));
+   fileList = rdir(fullfile(p.dirName, ['**' filesep '*_res*.mat']));
    p.fileNames = {fileList.name}';
    set(handles.popupmenu1, 'String', p.fileNames);
    axis(handles.axes1,'off','square')
@@ -95,11 +95,17 @@ try
 catch
    p.vDat = p;
 end
-tmp = load([p.currentFileName(1:end-8) '_res'],'p','fp');
+tmp = load([p.currentFileName],'p','fp');
 p.fp = tmp.fp;
-p.fp.tracks = tmp.p.tracks;
+try
+   p.fp.tracks = tmp.p.tracks;
+   p.fp.orientation = tmp.p.orientation;
+catch
+   p.fp.tracks = tmp.fp.tracks;  
+   p.fp.orientation = tmp.fp.orientation;
+end
 
-p.fp.orientation = tmp.p.orientation;
+% p.fp.orientation = tmp.p.orientation;
 p.fp = fix.fixOrientations(p.fp);
 oriX = p.fp.orientation(:,:,1);
 oriY = p.fp.orientation(:,:,2);
@@ -112,12 +118,19 @@ p.flyIdx(1:size(p.fp.tracks,1),[1 2]) = 1;
 p.flyIdx(1:size(p.fp.tracks,1),2) = 2;
 p.currentFly = 1; % select fly 1 per default
 
-if exist([p.currentFileName(1:end-8) '_fly.mj2'],'file');
+[currentFileDir, currentFileNam, currentFileExt] = fileparts(p.currentFileName);
+
+if exist([currentFileDir '/' currentFileNam(1:11) '_fly.mj2'],'file');
    p.flyBoxVidExists = true;
-   p.vidFileName = [p.currentFileName(1:end-8) '_fly.mj2'];
+   p.vidFileName = [currentFileDir '/' currentFileNam(1:11) '_fly.mj2'];
 else
    p.flyBoxVidExists = false;
-   p.vidFileName = [p.currentFileName(1:end-8) '.mp4'];
+   if exist([currentFileDir '/' currentFileNam(1:11) '.mp4'], 'file')
+      p.vidFileName = [currentFileDir '/' currentFileNam(1:11) '.mp4'];
+   end
+   if exist([currentFileDir '/' currentFileNam(1:11) '.avi'], 'file')
+      p.vidFileName = [currentFileDir '/' currentFileNam(1:11) '.avi'];
+   end
 end
 
 disp(['   loading ' p.vidFileName])
@@ -132,19 +145,30 @@ disp(['   loading ' p.vidFileName])
 %    p.fp.vr.read(1);
 % catch
 %    disp('falling back to built-in VideoReader.')
+
+% if ispc
+% % else
+% %    p.fp.vr = VideoReaderFFMPEG(p.vidFileName);
+% end
+
 p.fp.vr = VideoReader(p.vidFileName);
 p.fp.vr.read(1);
 % end
 p.imageChannels = size(p.fp.vr.read(1),3);
-p.boxW = -40:41;
-p.boxH = -40:41;
+try
+   p.boxW = tmp.p.flyBoxWidthIdx;%-60:61;
+   p.boxH = tmp.p.flyBoxHeightIdx;%-60:61;
+catch
+   p.boxW = -40:41;
+   p.boxH = -40:41;
+end
 p.NumFramesToRead = 2^nextpow2(128);% always make sure that this is square
 
 % selected frame in differen coordinates:
 p.selFrameSub = zeros(2,1);   % ?
 p.selFrameIdx = zeros(2,2);   % ?
 p.selFrame = zeros(1,2);      % ?
-p.framesToRead = round(linspace(p.fp.initFrame,p.fp.NumberOfFrames,p.NumFramesToRead));
+p.framesToRead = round(linspace(p.fp.initFrame,p.fp.vr.NumberOfFrames,p.NumFramesToRead));
 p.frames = fix.extractFlyFrames(p);
 plotFrames(handles);
 
@@ -252,7 +276,7 @@ end
 axes(handles.axes2)
 cla
 plot([p.framesToRead;p.framesToRead], repmat(1:p.fp.nFlies,length(p.framesToRead),1)','k')
-set(gca,'XLim',[p.fp.initFrame p.fp.NumberOfFrames]);%,'YTick',1:p.fp.nFlies,'box','off')
+set(gca,'XLim',[p.fp.initFrame p.fp.vr.NumberOfFrames]);%,'YTick',1:p.fp.nFlies,'box','off')
 hold on
 if min(p.selFrame)>0
    plot(min(p.selFrame)*[1;1], [1; p.fp.nFlies], 'LineWidth',2,'Color','r')
@@ -282,10 +306,10 @@ p.imh = plotFrames(handles);
 % --- ZOOM RESET
 function pushbutton2_Callback(hObject, eventdata, handles)
 global p
-p.framesToRead = round(linspace(p.fp.initFrame, p.fp.NumberOfFrames, p.NumFramesToRead));
+p.framesToRead = round(linspace(p.fp.initFrame, p.fp.vr.NumberOfFrames, p.NumFramesToRead));
 p.frames = fix.extractFlyFrames(p);
 p.selFrameSub = [1 p.NumFramesToRead];
-p.selFrame = [p.fp.initFrame p.fp.NumberOfFrames];
+p.selFrame = [p.fp.initFrame p.fp.vr.NumberOfFrames];
 plotFrames(handles);
 
 
@@ -313,15 +337,15 @@ global p
 % eventdata  reserved - to be defined in a future version of MATLAB
 % handles    structure with handles and user data (see GUIDATA)
 dFrame = round((p.framesToRead(end) - p.framesToRead(1))*p.NumFramesToRead);
-dFrame = limit(dFrame,1,floor((p.fp.NumberOfFrames-p.fp.initFrame)/p.NumFramesToRead));% make sure step size is such that p.NumFramesToRead steps fit in number of fraes
+dFrame = limit(dFrame,1,floor((p.fp.vr.NumberOfFrames-p.fp.initFrame)/p.NumFramesToRead));% make sure step size is such that p.NumFramesToRead steps fit in number of fraes
 p.framesToRead = round(mean(p.framesToRead)) + (-floor(p.NumFramesToRead/2):ceil(p.NumFramesToRead/2))*dFrame;
 
-% if p.framesToRead(end)>p.fp.NumberOfFrames% hit upper end - go back from end
-%    p.framesToRead = p.fp.NumberOfFrames - (p.NumFramesToRead:-1:1)*dFrame;
+% if p.framesToRead(end)>p.fp.vr.NumberOfFrames% hit upper end - go back from end
+%    p.framesToRead = p.fp.vr.NumberOfFrames - (p.NumFramesToRead:-1:1)*dFrame;
 % elseif p.framesToRead(end)<p.fp.initFrame% hit upper end - go back from end
 %    p.framesToRead = p.fp.initFrame + (1:p.NumFramesToRead)*dFrame;
 % end
-p.framesToRead = limit(p.framesToRead, p.fp.initFrame,p.fp.NumberOfFrames);
+p.framesToRead = limit(p.framesToRead, p.fp.initFrame,p.fp.vr.NumberOfFrames);
 p.frames = fix.extractFlyFrames(p);
 p.selFrameSub = [floor(p.NumFramesToRead/2) ceil(p.NumFramesToRead/2)];
 p.selFrame = p.framesToRead(p.selFrameSub);
@@ -373,6 +397,7 @@ function pushbutton5_Callback(hObject, eventdata, handles)
 global p
 saveFileName = [p.currentFileName(1:end-4) '_fixed.mat'];
 disp(['   saving to ' saveFileName])
+fp = p.fp;
 save(saveFileName, 'p','fp')
 disp(['   done.'])
 
@@ -381,10 +406,10 @@ disp(['   done.'])
 function pushbutton6_Callback(hObject, eventdata, handles)
 global p
 p.framesToRead = round(max(p.framesToRead)+(0:p.skipSize:p.skipSize*p.NumFramesToRead));
-p.framesToRead = limit(p.framesToRead, p.fp.initFrame,p.fp.NumberOfFrames);
+p.framesToRead = limit(p.framesToRead, p.fp.initFrame,p.fp.vr.NumberOfFrames);
 p.frames = fix.extractFlyFrames(p);
 p.selFrameSub = [1 p.NumFramesToRead];
-p.selFrame = [p.fp.initFrame p.fp.NumberOfFrames];
+p.selFrame = [p.fp.initFrame p.fp.vr.NumberOfFrames];
 plotFrames(handles);
 
 
@@ -393,10 +418,10 @@ plotFrames(handles);
 function pushbutton7_Callback(hObject, eventdata, handles)
 global p
 p.framesToRead = round(min(p.framesToRead)-p.skipSize*p.NumFramesToRead + (0:p.skipSize:p.skipSize*p.NumFramesToRead));
-p.framesToRead = limit(p.framesToRead, p.fp.initFrame,p.fp.NumberOfFrames);
+p.framesToRead = limit(p.framesToRead, p.fp.initFrame,p.fp.vr.NumberOfFrames);
 p.frames = fix.extractFlyFrames(p);
 p.selFrameSub = [1 p.NumFramesToRead];
-p.selFrame = [p.fp.initFrame p.fp.NumberOfFrames];
+p.selFrame = [p.fp.initFrame p.fp.vr.NumberOfFrames];
 plotFrames(handles);
 
 
@@ -404,10 +429,10 @@ plotFrames(handles);
 function pushbutton8_Callback(hObject, eventdata, handles)
 global p
 p.framesToRead = round(p.fp.initFrame:p.skipSize:p.skipSize*p.NumFramesToRead);
-p.framesToRead = limit(p.framesToRead, p.fp.initFrame,p.fp.NumberOfFrames);
+p.framesToRead = limit(p.framesToRead, p.fp.initFrame,p.fp.vr.NumberOfFrames);
 p.frames = fix.extractFlyFrames(p);
 p.selFrameSub = [1 p.NumFramesToRead];
-p.selFrame = [p.fp.initFrame p.fp.NumberOfFrames];
+p.selFrame = [p.fp.initFrame p.fp.vr.NumberOfFrames];
 plotFrames(handles);
 
 
